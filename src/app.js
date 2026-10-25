@@ -1,6 +1,7 @@
 // app.js
 import express from 'express';
 import userAuthRouter from './routes/auth.routes.js';
+import errorMiddleware from './middlewares/error.middleware.js';
 
 import cookieParser from 'cookie-parser';
 
@@ -15,6 +16,8 @@ app.use(express.json());
 app.use(cookieParser());
 
 app.use('/api/auth', userAuthRouter);
+
+app.use(errorMiddleware);
 
 app.get('/', (req, res) => {
     res.send('welcome to the app api');
