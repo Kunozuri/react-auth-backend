@@ -67,27 +67,71 @@ const issueTokens = async (res, user) => {
 // - `throw new ApiError(status, message)` is the whole error in one line.
 // ---------------------------------------------------------------------------
 
+// ============================================================================
+// sign-up.controller.js - the updated signUp, with more fields.
+// ============================================================================
+//
+// This REPLACES the signUp function in your auth.controller.js. The imports at
+// the top of that file stay the same (asyncHandler, ApiError, User, bcrypt,
+// issueTokens, MIN_PASSWORD_LENGTH).
+//
+// WHAT CHANGED
+//   - `name` is now `firstName` + `lastName`.
+//   - New optional fields: phone, country.
+//   - New required check: acceptedTerms must be exactly `true`.
+//   - There is NO confirmPassword here on purpose. It's only a typo guard for
+//     the person typing, so the frontend checks it and never sends it.
+//
+// WHAT DID NOT CHANGE
+//   The security approach is the same as before: take only the fields we
+//   accept, check that they are plain strings, check the password length
+//   before hashing, hash it, and send back the user without the hash.
+// ============================================================================
+
 // ---------------------------------------------------------------------------
 // SIGN UP
 // ---------------------------------------------------------------------------
 export const signUp = asyncHandler(async (req, res) => {
-    // Take ONLY these three values. If we spread req.body into User.create(),
+    // Take ONLY these fields. If we spread req.body into User.create(),
     // a user could send { "role": "admin" } and make themselves an admin.
-    const { name, email, password } = req.body;
+    const { firstName, lastName, email, password, phone, country, acceptedTerms } = req.body;
 
-    // typeof check: makes sure email and password are plain strings.
-    // Without it, someone could send { "$gt": "" } as the email and trick the query below (NoSQL injection).
-    if (typeof email !== 'string' || typeof password !== 'string') {
-        throw new ApiError(400, 'Email and password are required'); // 400 = Bad Request
+    // typeof check on the REQUIRED text fields: makes sure they are plain strings.
+    // Without it, someone could send { "$gt": "" } as the email and trick the
+    // query below (NoSQL injection).
+    if (
+        typeof firstName !== 'string' ||
+        typeof lastName !== 'string' ||
+        typeof email !== 'string' ||
+        typeof password !== 'string'
+    ) {
+        throw new ApiError(400, 'First name, last name, email and password are required');
     }
 
-    // Check the length BEFORE hashing. A bcrypt hash is always 60 characters, so the model's
-    // minlength rule would always pass after hashing, even for a 1-character password.
+    // The OPTIONAL fields may be missing (undefined), but if they ARE sent they
+    // must be strings too, for the same reason.
+    if (
+        (phone !== undefined && typeof phone !== 'string') ||
+        (country !== undefined && typeof country !== 'string')
+    ) {
+        throw new ApiError(400, 'Invalid phone or country');
+    }
+
+    // `!== true` is strict on purpose: the string "true", the number 1 or
+    // anything else does NOT count. Only a real boolean true passes.
+    if (acceptedTerms !== true) {
+        throw new ApiError(400, 'You must accept the terms to create an account');
+    }
+
+    // Check the length BEFORE hashing. A bcrypt hash is always 60 characters, so
+    // the model's minlength rule would always pass after hashing, even for a
+    // 1-character password.
     if (password.length < MIN_PASSWORD_LENGTH) {
         throw new ApiError(400, `Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
     }
 
-    // trim() removes spaces at the ends, toLowerCase() makes "A@B.com" and "a@b.com" the same.
+    // trim() removes spaces at the ends, toLowerCase() makes "A@B.com" and
+    // "a@b.com" the same.
     const normalizedEmail = email.trim().toLowerCase();
 
     // findOne returns the user document, or null if nobody has this email.
@@ -96,28 +140,41 @@ export const signUp = asyncHandler(async (req, res) => {
         throw new ApiError(409, 'Email already in use'); // 409 = Conflict
     }
 
-    // The salt is random data mixed in so two users with the same password get different hashes.
-    // 10 is the cost: higher = safer but slower.
+    // The salt is random data mixed in so two users with the same password get
+    // different hashes. 10 is the cost: higher = safer but slower.
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Mongoose runs the model's validation first. If it fails it throws a ValidationError,
-    // and error.middleware.js turns that into a 400 response with the validation messages.
+    // Mongoose runs the model's validation first (name lengths, phone format...).
+    // If it fails it throws a ValidationError, and error.middleware.js turns that
+    // into a 400 response with the validation messages.
     const newUser = await User.create({
-        name,
+        firstName,
+        lastName, // the schema's `trim: true` cleans the spaces
         email: normalizedEmail,
         password: hashedPassword,
+
+        // Optional fields: `phone?.trim()` is undefined when phone is missing.
+        // `|| undefined` also turns an empty string "" into undefined, so we
+        // never store "" (which would fail the format rules in the model).
+        phone: phone?.trim() || undefined,
+        country: country?.trim() || undefined,
+
+        // We store WHEN they accepted, not just that they did.
+        termsAcceptedAt: new Date(),
     });
 
-    // The new user is signed in right away: access token returned, refresh cookie set on `res`.
+    // The new user is signed in right away: access token returned, refresh
+    // cookie set on `res`.
     const accessToken = await issueTokens(res, newUser);
 
-    // create() returns the document WITH the password hash (select: false only hides it on queries),
-    // so convert to a plain object and remove it before sending.
+    // create() returns the document WITH the password hash (select: false only
+    // hides it on queries), so convert to a plain object and remove it.
     const userData = newUser.toObject();
     delete userData.password;
 
-    // 201 = Created. The refresh token is NOT in the body, it travels in the httpOnly cookie only.
+    // 201 = Created. The refresh token is NOT in the body, it travels in the
+    // httpOnly cookie only.
     res.status(201).json({
         success: true,
         message: 'User created successfully',
